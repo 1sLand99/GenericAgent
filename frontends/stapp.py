@@ -264,12 +264,32 @@ def _step_title(s, j=0):
 def _get_fold_turns(): return lru_cache(maxsize=128)(_fold_turns_impl)
 
 fold_turns = _get_fold_turns()
-def render_segments(segments, suffix=''):
-    for seg in segments:
-        if seg['type'] == 'fold':
-            with st.expander(seg['title'], expanded=False): st.markdown(seg['content'])
+_FOLD_RECENT, _FOLD_GROUP = 50, 30
+def render_folds(folds, key):
+    """folds: [(title, content)]. Last _FOLD_RECENT steps = one expander each; older steps are
+    grouped per _FOLD_GROUP and only sent when the group's toggle is on (keeps element count
+    and browser markdown work bounded on very long answers). Nested expanders are illegal in
+    Streamlit, hence toggle + flat expanders instead of expander-in-expander."""
+    old = max(0, len(folds) - _FOLD_RECENT)
+    for g in range(0, old, _FOLD_GROUP):
+        grp = folds[g:min(g + _FOLD_GROUP, old)]
+        a, b = g + 1, g + len(grp)
+        if st.toggle(f"📚 第 {a}–{b} 步 · {grp[0][0]} → {grp[-1][0]}", key=f"_fg_{key}_{g}"):
+            for t, c in grp:
+                with st.expander(t, expanded=False): st.markdown(c)
         else:
-            st.markdown(seg['content'] + suffix)
+            with st.expander(f"目录（{len(grp)} 步，打开上方开关加载详情）", expanded=False):
+                st.markdown("\n".join(f"{a + j}. {t.replace(chr(10), ' ')}" for j, (t, _) in enumerate(grp)))
+    for t, c in folds[old:]:
+        with st.expander(t, expanded=False): st.markdown(c)
+
+def render_segments(segments, suffix='', key='h'):
+    folds = []
+    for seg in segments:
+        if seg['type'] == 'fold': folds.append((seg['title'], seg['content'])); continue
+        if folds: render_folds(folds, key); folds = []
+        st.markdown(seg['content'] + suffix)
+    if folds: render_folds(folds, key)
 
 def _start_main_task(prompt):
     """Start a task whose queue can be drained across Streamlit reruns."""
@@ -335,11 +355,11 @@ if len(_msgs) > _HIST_TAIL:
         if st.button(T('hide_earlier'), key="_hide_hist"):
             st.session_state.show_full_history = False
             st.rerun()
-for msg in _msgs:
+for _mi, msg in enumerate(_msgs):
     with st.chat_message(msg["role"]):
         slot = st.empty()
         with slot.container():
-            if msg["role"] == "assistant": render_segments(fold_turns(msg["content"]))
+            if msg["role"] == "assistant": render_segments(fold_turns(msg["content"]), key=f"h{len(st.session_state.messages) - len(_msgs) + _mi}")
             else: st.markdown(msg["content"])
 
 # Scroll-height ghost fix: during streaming, expander open/close mid-animation can leave
@@ -497,9 +517,7 @@ def _tick():
         # bubble (expanders + live tail) is re-emitted from state every tick,
         # so a rerun can neither drop nor duplicate elements.
         with st.chat_message("assistant"):
-            for i in range(max(0, len(steps) - 1)):
-                body = steps[i] or ''
-                with st.expander(_step_title(body, i), expanded=False): st.markdown(body)
+            render_folds([(_step_title(steps[i] or '', i), steps[i] or '') for i in range(max(0, len(steps) - 1))], key="live")
             st.markdown(live + " ▌")
         _render_stat_badge(is_running=True)
         return
