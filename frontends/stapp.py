@@ -27,6 +27,20 @@ except ImportError:
 
 st.set_page_config(page_title="Cowork", layout="wide", initial_sidebar_state="collapsed")
 
+def _unbound_ws_queue():
+    # st1.62 starlette server: per-connection send queue is hard-capped at 500 msgs; a burst
+    # of elements (long answer, full repaint) fills it → session treated as disconnected →
+    # script StopException → page stuck on RUNNING forever. Make the queue unbounded.
+    try:
+        import streamlit.web.server.starlette.starlette_websocket as _w
+        from streamlit.runtime import get_instance
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        _w.WEBSOCKET_MAX_SEND_QUEUE_SIZE = 0
+        _i = get_instance()._session_mgr.get_active_session_info(get_script_run_ctx().session_id)
+        if _i and hasattr(_i.client, '_send_queue'): _i.client._send_queue._maxsize = 0
+    except Exception: pass
+_unbound_ws_queue()
+
 st.markdown("""
 <style>
 [data-testid="stBottom"]{position:fixed!important;bottom:0!important;left:0!important;right:0!important;width:100vw!important;z-index:999;background:var(--background-color,#fff)}
